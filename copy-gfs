@@ -1,0 +1,406 @@
+#!/usr/bin/env python
+# coding=UTF-8
+
+#
+# This script maintains GFS-style copies of file
+# It differs from other analogs in this aspect:
+#   if you miss (or failed) to run this script on first day of week/month/year,
+#   you will not miss GFS copy for that period, first launch will initiate missed copy from current file
+#
+
+# TODO: Добавить README.md (в т.ч. вписать что такое mktestdata)
+# TODO: Опубликовать на github. Можно пересоздав репозиторий с 0. Добавить License. Можно иметь secondary (optional) origin?
+
+from __future__ import print_function
+
+import os
+import sys
+import datetime
+import fnmatch
+import argparse
+import shutil
+from collections import OrderedDict
+
+# these are described in parse_cmdline
+source_path = None
+dest_base   = None
+file_mask   = None
+date_now    = datetime.datetime.now()
+skip_exist  = False
+do_cleanup  = False
+verbose     = False
+do_debug    = False
+
+periods = OrderedDict( [
+    ( "minutely", { "keep_count":  0, "datemask": '%Y%m%d%H%M' } ),
+    ( "hourly",   { "keep_count":  0, "datemask": '%Y%m%d%H' } ),
+    ( "daily",    { "keep_count":  8, "datemask": '%Y%m%d' } ),
+    ( "weekly",   { "keep_count":  5, "datemask": '%Gweek%V' } ),
+    ( "monthly",  { "keep_count": 13, "datemask": '%Y%m' } ),
+    ( "yearly",   { "keep_count":  5, "datemask": '%Y' } ),
+    ] )
+
+def whoami():
+    return sys._getframe(1).f_code.co_name
+
+def eprint(*args, **kwargs):
+    # print to stderr
+    print(*args, file=sys.stderr, **kwargs)
+
+def vprint(*args, **kwargs):
+    # print only if verbose flag set
+    if verbose:
+        print(*args, **kwargs)
+
+def veprint(*args, **kwargs):
+    # same as vprint, but to stderr
+    if verbose:
+        eprint(*args, **kwargs)
+
+def dprint(*args, **kwargs):
+    # debugging
+    if do_debug:
+        eprint(*args, **kwargs)
+
+#try:
+#    import dateutil.parser
+#except ImportError:
+#    eprint("You need to install python dateutil module")
+#    eprint("i.e. for CentOS: sudo yum -y install python-dateutil")
+#    sys.exit(10)
+
+def parse_cmdline():
+    global source_path
+    global dest_base
+    global file_mask
+    global skip_exist
+    global do_cleanup
+    global date_now
+    global verbose
+    global do_debug
+
+    parser = argparse.ArgumentParser(
+            description="Maintain GFS-style directory structure\n"+
+            "It will:\n"
+            " - Copy SOURCE file to GFS destination direcories under DESTDIR:\n"+
+            "   DESTDIR/" + ', '.join([p for p in periods.keys() if periods[p]["keep_count"]!=0]) + ",\n"+
+            "   and, disabled by default: " + ', '.join([p for p in periods.keys() if periods[p]["keep_count"]==0]) + "\n"+
+            "   Date and time of source file are preserved\n"+
+            " - (if -c given) Cleanup old files from GFS directories:\n"+
+            "   Delete from these directories all files based on MASK except one copy\n"+
+            "   Will keep only one OLDEST copy of each period\n"+
+            "   (i.e., for monthly - 1st of January, 1st of February, etc, or for other\n"+
+            "   dates if there was no files for 1st, anyway only one file per month)\n"+
+            "It will not delete SOURCE file",
+            formatter_class=argparse.RawTextHelpFormatter)
+    parser.add_argument("-s", "--source",
+            help="Source file name"
+            )
+    parser.add_argument("-d", "--destdir",
+            help="Destination directory, under which GFS subdirs will be made\n"+
+            "Subdirectories: "+', '.join(periods.keys())+"\n"+
+            "No changes will be made outside these subdirectories"
+            )
+    parser.add_argument("-k", "--skipexist", action='store_true',
+            help="Skip copy to GFS directory if it already contains a copy for period that\n"+
+            "corresponds to SOURCE date\n"+
+            "It is more safe not to use -s, but use -c instead\n"+
+            "With -c file will always be first (an always!) copied to GFS,\n"+
+            "  and only then deleted if it is not needed\n"+
+            "  or else it is possible to skip copying if there is an error in this program :-)"
+            )
+    parser.add_argument("-c", "--cleanup", action='store_true',
+            help="Perform cleanup of GFS directories"
+            )
+    parser.add_argument("-m", "--mask",
+            help="File mask (as in shell)\n"+
+            "All files that doesn't begin with mask will be ignored\n"+
+            "Source file must match the mask, otherwise command will finish with an error\n"+
+            "i.e. if your file is my-bck-2018-05-17.tar, then good mask is 'my-bck-*.tar'\n"+
+            "other backup jobs MUST NOT match mask, or some useful data will be deleted from GFS\n"+
+            "or other files may be kept instead of your files\n"+
+            "If mask doesn't end with *, it will be appended to mask\n"+
+            "And DON't FORGET to embrace mask in quotes or excape shell expansion symbols!"
+            )
+    #parser.add_argument("-n", "--now",
+    #        help="Pretend that today is given date (useful for testing your strategies)"
+    #        )
+    for period in periods:
+        if periods[period]["keep_count"] != 0:
+            parser.add_argument("--keep-%s" % period, type=int, metavar="N", help="default N=%s" % periods[period]["keep_count"])
+    for period in periods:
+        if periods[period]["keep_count"] == 0:
+            parser.add_argument("--keep-%s" % period, type=int, metavar="N", help="default N=%s (disabled)" % periods[period]["keep_count"])
+    parser.add_argument("-v", "--verbose", action='count',
+            help="Print verbose output, twice for debugging output"
+            )
+
+    args = parser.parse_args()
+
+    if args.verbose:
+        verbose = True
+        if args.verbose > 1:
+            do_debug = True
+
+    source_path = args.source
+    dest_base   = args.destdir
+    file_mask   = args.mask
+    skip_exist  = args.skipexist
+    do_cleanup  = args.cleanup
+
+    if dest_base == None:
+        eprint("No destination directory given, use -h for help")
+        return False
+
+    if file_mask == None:
+        eprint("No file mask given, use -h for help")
+        return False
+
+    for period in periods:
+        try:
+            argval = vars(args)["keep_%s" % period]
+        except KeyError:
+            # ok, there was no such argument
+            continue
+        if argval == None:
+            continue
+        if argval >= 0:
+            periods[period]["keep_count"] = argval
+        else:
+            eprint("Bad value for keep-%s: %s" % (period, argval))
+            return False
+
+    if not file_mask.endswith('*'):
+        file_mask += '*'
+
+    #if args.now != None:
+    #    try:
+    #        date_now = dateutil.parser.parse(args.now)
+    #    except Exception as e:
+    #        eprint("Failed to parse date '%s': %s(%s)" % (args.now, type(e).__name__, str(e)))
+    #        return False
+
+    if not do_cleanup and not source_path:
+        eprint("You need to specify -c, -s or both; use -h for help")
+        return False
+
+    # check that source file matches mask
+    if source_path:
+        file_basename = os.path.basename(source_path)
+        if not fnmatch.fnmatch(file_basename, file_mask):
+            eprint("The name of source file (%s) does not match mask (%s)" % (file_basename, file_mask))
+            return False
+
+    dprint("Command line parsed")
+    dprint("source_path = '%s'" % source_path)
+    dprint("dest_base   = '%s'" % dest_base)
+    dprint("file_mask   = '%s'" % file_mask)
+    dprint("do_cleanup  = '%s'" % do_cleanup)
+    dprint("date_now    = '%s'" % date_now)
+    dprint("periods definitions:")
+    for period in periods:
+        dprint("  %s: %s" % (period, periods[period]))
+
+    return True
+
+def raise_if_unknown_period(period):
+    """
+    raises exception if period name is unknown
+    """
+    if period not in periods:
+        raise Exception("Internal error: unsupported period '%s'" % (preiod))
+    return True
+
+def period_dirname(period):
+    """
+    returns directory name for given period
+    or throws exception
+    """
+    raise_if_unknown_period(period)
+    return os.path.join(dest_base, period)
+
+def get_period_id(period, dt):
+    """
+    return period id for given datetime and period type
+    """
+    raise_if_unknown_period(period)
+    return dt.strftime(periods[period]["datemask"])
+
+def list_gfs(period):
+    """
+    will return list of full paths that match mask and period
+    """
+    dprint("%s(%s) called" % (whoami(), period))
+    dirname = period_dirname(period)
+    rv = []
+    try:
+        listing = os.listdir(dirname)
+    except OSError as e:
+        if periods[period]["keep_count"] == 0:
+            dprint("%s(%s): returning empty (no directory and keep_count==0)" % (whoami(), period))
+        else:
+            dprint("%s(%s): can't list directory %s: %s" % (whoami(), period, dirname, str(e)))
+            dprint("%s(%s): returning empty" % (whoami(), period))
+        return rv
+
+    for filename in listing:
+        filepath = os.path.join(dirname, filename)
+        if not fnmatch.fnmatch(filename, file_mask):
+            dprint('%s(%s): skipped file: %s' % (whoami(), period, filepath))
+            continue
+        else:
+            #dprint('%s(%s): adding file: %s' % (whoami(), period, filepath))
+            rv.append(filepath)
+    dprint("%s(%s): returning %s" % (whoami(), period, rv))
+    return rv
+
+def has_gfs_copy(period, source_period_id):
+    """
+    check if directory with given period already contains copy of file based on mask in current period
+    period is name of period
+    source_period_id is result of get_period_id for source file
+    return:
+      True if there is any file in GFS that matches current date's period
+      False if not
+    """
+    dprint("%s(%s) called" % (whoami(), period))
+    dprint("%s(%s): period id for now: '%s'" % (whoami(), period, source_period_id))
+    for filepath in list_gfs(period):
+        period_id_file = get_period_id(period, datetime.datetime.fromtimestamp(os.path.getmtime(filepath)))
+        if source_period_id == period_id_file:
+            dprint("%s(%s): period id for %s: '%s' and matches current period" % (whoami(), period, filepath, period_id_file))
+            dprint("%s(%s): returning True" % (whoami(), period))
+            return True
+        else:
+            dprint("%s(%s): period id for %s: '%s', skipping" % (whoami(), period, filepath, period_id_file))
+    dprint("%s(%s): returning False" % (whoami(), period))
+    return False
+
+def copy_to_gfs(src, only_if_not_exists=False):
+    """
+    for each period type, copy src to each period's directory
+    if only_if_not_exists=True:
+        check if there is no existing copy for current period in period's directory,
+        and copy only if there is no copy
+    returns True if there were no errors,
+    otherwise False
+    """
+    dprint("%s(%s) called" % (whoami(), src))
+    rv = True
+    for period in periods:
+        if periods[period]["keep_count"] == 0:
+            dprint("skipping %s: keep_count==0" % (period))
+            continue
+        source_dt = datetime.datetime.fromtimestamp(os.path.getmtime(src))
+        source_period_id = get_period_id(period, source_dt)
+        destdir = period_dirname(period)
+        if not os.path.exists(destdir):
+            veprint("'%s' is not exists, creating" % (destdir))
+            try:
+                os.mkdir(destdir)
+            except Exception as e:
+                eprint("Failed to create directory '%s': %s" % (destdir, str(e)))
+                rv = False
+                continue
+        if only_if_not_exists and has_gfs_copy(period, source_period_id):
+            veprint("Already have file in %s, period %s" % (period, source_period_id))
+        else:
+            dprint("copying %s to %s" % (src, destdir))
+            dst = os.path.join(destdir, os.path.basename(src))
+            if os.path.exists(dst):
+                dprint("%s exists, appending date to name" % (dst))
+                dst = dst + "." + source_dt.strftime("%Y%m%d")
+            if os.path.exists(dst):
+                dprint("%s exists, appending time to name" % (dst))
+                dst = dst + "-" + source_dt.strftime("%H%M")
+            if os.path.exists(dst):
+                dprint("%s exists, appending seconds to name" % (dst))
+                dst = dst + source_dt.strftime("%S")
+            dst_final = dst
+            dst_counter = 1
+            while os.path.exists(dst_final):
+                dprint("%s exists, appending '%s' to name" % (dst_final, dst_counter))
+                dst_final = "%s-%s" % (dst, dst_counter)
+                dst_counter += 1
+            dst = dst_final
+                
+            try:
+                shutil.copy2(src, dst)
+                veprint("Copied %s to %s" % (src, dst))
+            except Exception as e:
+                eprint("Failed to copy %s to %s: %s" % (src, destdir + os.sep, str(e)))
+                rv = False
+                continue
+    return rv
+
+def cleanup_gfs():
+    """
+    removes unneeded files from GFS directories
+    returns True if no errors found
+    otherwise False
+    """
+    dprint("%s() called" % (whoami()))
+    rv = True
+    for period in periods:
+        if periods[period]["keep_count"] == 0:
+            dprint("skipping %s: keep_count==0" % (period))
+            continue
+        dprint("cleaning up in %s (%s)" % (period, period_dirname(period)))
+        dprint("phase 1: removing duplicate files in same periods")
+        period_ids_seen = []
+        for filepath in sorted(list_gfs(period), key=lambda x: os.path.getmtime(x)):
+            file_period_id = get_period_id(period, datetime.datetime.fromtimestamp(os.path.getmtime(filepath)))
+            if file_period_id in period_ids_seen:
+                veprint("Deleting from %s of period %s: %s" % (period, file_period_id, filepath))
+                try:
+                    os.remove(filepath)
+                except Exception as e:
+                    eprint("Failed to delete %s: %s" % (filepath, str(e)))
+                    rv = False
+            else:
+                period_ids_seen.append(file_period_id)
+        dprint("phase 2: removing older periods")
+        period_ids_seen = []
+        delete_all_remaining = False
+        for filepath in sorted(list_gfs(period), reverse=True, key=lambda x: os.path.getmtime(x)):
+            if not delete_all_remaining:
+                file_period_id = get_period_id(period, datetime.datetime.fromtimestamp(os.path.getmtime(filepath)))
+                if len(period_ids_seen) >= periods[period]["keep_count"]:
+                    veprint("Deleting remaining files from %s (already have %s copies)" % (period, periods[period]["keep_count"]))
+                    delete_all_remaining = True
+                else:
+                    period_ids_seen.append(file_period_id)
+            if delete_all_remaining:
+                veprint("Deleting %s" % (filepath))
+                try:
+                    os.remove(filepath)
+                except Exception as e:
+                    eprint("Failed to delete %s: %s" % (filepath, str(e)))
+                    rv = False
+    return rv
+
+if not parse_cmdline():
+    sys.exit(10)
+
+if not os.path.exists(os.path.realpath(dest_base)):
+    eprint("No such directory: '%s'" % (dest_base))
+    sys.exit(10)
+else:
+    if not os.path.isdir(os.path.realpath(dest_base)):
+        eprint("'%s' must be a directory (or symlink to directory)" % (dest_base))
+        sys.exit(10)
+
+rv = 0
+if source_path:
+    if not copy_to_gfs(source_path, skip_exist):
+        rv = 1
+
+if do_cleanup:
+    if not cleanup_gfs():
+        if rv == 0:
+            rv = 2
+
+veprint("Exiting with status %s" % (rv))
+sys.exit(rv)
+
+# vim:expandtab tabstop=8 shiftwidth=4 softtabstop=4
