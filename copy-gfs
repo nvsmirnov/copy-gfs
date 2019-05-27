@@ -8,9 +8,6 @@
 #   you will not miss GFS copy for that period, first launch will initiate missed copy from current file
 #
 
-# TODO: Добавить README.md (в т.ч. вписать что такое mktestdata)
-# TODO: Опубликовать на github. Можно пересоздав репозиторий с 0. Добавить License. Можно иметь secondary (optional) origin?
-
 from __future__ import print_function
 
 import os
