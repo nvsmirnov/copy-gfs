@@ -25,32 +25,25 @@ Say your backup file is ``/backup/my-system-2019-05-22.tar.gz``.
 Before running ``copy-gfs``, create directory for GFS structure, say, ``/backup-gfs``.
 Then just run:
 ```
-copy-gfs -c -d /backup-gfs -m '' -s /backup/my-system-2019-05-22.tar.gz
+copy-gfs -c -l -d /backup-gfs -m '' -s /backup/my-system-2019-05-22.tar.gz
 ```
 If you have few different jobs that produce different file names (i.e. application backup and database backup),
 and you want to save them into one GFS directory, then you need to define file mask for each job with ``-m`` parameter.
 If you will not do this, ``gfs-copy`` will treat them as one job, deleting another job's files from GFS or preventing making a copy.
 To do this, run something like this:
 ```
-copy-gfs -c -d /backup-gfs -m 'my-app-*' -s /backup/my-app-2019-05-22.tar.gz
-copy-gfs -c -d /backup-gfs -m 'my-db-*'  -s /backup/my-db-2019-05-22.tar.gz
+copy-gfs -c -l -d /backup-gfs -m 'my-app-*' -s /backup/my-app-2019-05-22.tar.gz
+copy-gfs -c -l -d /backup-gfs -m 'my-db-*'  -s /backup/my-db-2019-05-22.tar.gz
 ```
 And then, backups will not interfere with each other. ``copy-gfs`` will simply ignore files that do not fit the mask.
 
-### How to maintain some "latest" copies in addition to GFS historical copies
-The script does not maintain 'latest' copy, only historical versions.
-But you can do it yourself by this:
-- Create directory named ``latest`` in your GFS directory.
-- Create your backup file there.
-- Run copy-gfs on backup file.
-- If your file names are unique (i.e. date-time-based), then remove old copies with something like this:
-(in this example only one latest file will be kept, replace "2" to higher number to save more)
-``ls -1t "latest/my-db-*" | tail -n +2 | xargs -r rm -f``
+### How to maintain "latest" copies in addition to GFS historical copies
+Due to historical compatibility reasons, this script saves latest copy only if -l (--keep-latest) option is given.
 
 ### Command-line arguments
 ```
 $ copy-gfs -h
-usage: copy-gfs [-h] [-s SOURCE] [-d DESTDIR] [-k] [-c] [-m MASK]
+usage: copy-gfs [-h] [-s SOURCE] [-d DESTDIR] [-k] [-c] [-m MASK] [-l]
                 [--keep-daily N] [--keep-weekly N] [--keep-monthly N]
                 [--keep-yearly N] [--keep-minutely N] [--keep-hourly N] [-v]
 
@@ -90,13 +83,15 @@ optional arguments:
                         or other files may be kept instead of your files
                         If mask doesn't end with *, it will be appended to mask
                         And DON't FORGET to embrace mask in quotes or excape shell expansion symbols!
+  -l, --keep-latest     Make a copy of file in 'latest' GFS subdirectory
+                        and remove other files with given mask
   --keep-daily N        default N=8
   --keep-weekly N       default N=5
   --keep-monthly N      default N=13
   --keep-yearly N       default N=5
   --keep-minutely N     default N=0 (disabled)
   --keep-hourly N       default N=0 (disabled)
-  -v, --verbose         Print verbose output, twice for debugging output
+  -v, --verbose         Print verbose output, -vv for debugging output
 ```
 
 ### Testing

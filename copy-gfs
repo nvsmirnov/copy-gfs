@@ -23,6 +23,7 @@ source_path = None
 dest_base   = None
 file_mask   = None
 date_now    = datetime.datetime.now()
+keep_latest = False
 skip_exist  = False
 do_cleanup  = False
 verbose     = False
@@ -75,6 +76,7 @@ def parse_cmdline():
     global date_now
     global verbose
     global do_debug
+    global keep_latest
 
     parser = argparse.ArgumentParser(
             description="Maintain GFS-style directory structure\n"+
@@ -122,6 +124,10 @@ def parse_cmdline():
     #parser.add_argument("-n", "--now",
     #        help="Pretend that today is given date (useful for testing your strategies)"
     #        )
+    parser.add_argument("-l", "--keep-latest", action='store_true', default=False,
+            help="Make a copy of file in 'latest' GFS subdirectory\n"+
+            "and remove other files with given mask"
+            )
     for period in periods:
         if periods[period]["keep_count"] != 0:
             parser.add_argument("--keep-%s" % period, type=int, metavar="N", help="default N=%s" % periods[period]["keep_count"])
@@ -129,7 +135,7 @@ def parse_cmdline():
         if periods[period]["keep_count"] == 0:
             parser.add_argument("--keep-%s" % period, type=int, metavar="N", help="default N=%s (disabled)" % periods[period]["keep_count"])
     parser.add_argument("-v", "--verbose", action='count',
-            help="Print verbose output, twice for debugging output"
+            help="Print verbose output, -vv for debugging output"
             )
 
     args = parser.parse_args()
@@ -144,6 +150,7 @@ def parse_cmdline():
     file_mask   = args.mask
     skip_exist  = args.skipexist
     do_cleanup  = args.cleanup
+    keep_latest = args.keep_latest
 
     if dest_base == None:
         eprint("No destination directory given, use -h for help")
@@ -194,6 +201,7 @@ def parse_cmdline():
     dprint("file_mask   = '%s'" % file_mask)
     dprint("do_cleanup  = '%s'" % do_cleanup)
     dprint("date_now    = '%s'" % date_now)
+    dprint("keep_latest = '%s'" % keep_latest)
     dprint("periods definitions:")
     for period in periods:
         dprint("  %s: %s" % (period, periods[period]))
@@ -213,7 +221,8 @@ def period_dirname(period):
     returns directory name for given period
     or throws exception
     """
-    raise_if_unknown_period(period)
+    if period != 'latest':
+        raise_if_unknown_period(period)
     return os.path.join(dest_base, period)
 
 def get_period_id(period, dt):
@@ -284,6 +293,39 @@ def copy_to_gfs(src, only_if_not_exists=False):
     """
     dprint("%s(%s) called" % (whoami(), src))
     rv = True
+
+    if keep_latest:
+        dprint("Saving latest copy")
+        period = "latest"
+        destdir = period_dirname(period)
+        if not os.path.exists(destdir):
+            veprint("'%s' is not exists, creating" % (destdir))
+            try:
+                os.mkdir(destdir)
+            except Exception as e:
+                eprint("Failed to create directory '%s': %s" % (destdir, str(e)))
+        dprint("copying %s to %s" % (src, destdir))
+        dst = os.path.join(destdir, os.path.basename(src))
+        try:
+            shutil.copy2(src, dst)
+            veprint("Copied %s to %s" % (src, dst))
+        except Exception as e:
+            eprint("Failed to copy %s to %s: %s" % (src, destdir + os.sep, str(e)))
+            rv = False
+        else:
+            # here, remove all files matching mask but one that we just copied
+            dprint("Removing old copies in latest subdirectory")
+            for filepath in list_gfs(period):
+                if os.path.normpath(filepath) == os.path.normpath(dst):
+                    dprint("Skipping remove of %s, it is the file we just copied" % filepath)
+                else:
+                    veprint("Deleting %s" % (filepath))
+                    try:
+                        os.remove(filepath)
+                    except Exception as e:
+                        eprint("Failed to delete %s: %s" % (filepath, str(e)))
+                        rv = False
+
     for period in periods:
         if periods[period]["keep_count"] == 0:
             dprint("skipping %s: keep_count==0" % (period))

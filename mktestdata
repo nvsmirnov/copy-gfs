@@ -19,8 +19,11 @@ mktest() {
   fi
 }
 
+GFSROOT=data/gfs
+mkdir -p "$GFSROOT"
+
 # generate some files that will already be saved in gfs directories befor running copy-gfs - to see which files will be kept and which deleted
-for dir in data/hourly data/minutely data/daily data/weekly data/monthly data/yearly; do
+for dir in ${GFSROOT}/latest ${GFSROOT}/hourly ${GFSROOT}/minutely ${GFSROOT}/daily ${GFSROOT}/weekly ${GFSROOT}/monthly ${GFSROOT}/yearly; do
   rm -rf "$dir"
   mkdir -p $dir
   touch $dir/file1.tar
@@ -61,9 +64,9 @@ mkdir -p data/latest
   echo $dt
   touch -t $dt data/latest/test-latest.tar
   # copy file to gfs but do not clean up
-  ./copy-gfs $KEEPS -s data/latest/test-latest.tar -d data -m 'test*.tar'
+  ./copy-gfs $KEEPS -l -s data/latest/test-latest.tar -d ${GFSROOT} -m 'test*.tar'
 done 
-# here, you may look ls -lRtr data | less and see which files should be kept
+# here, you may look ls -lRtr data/gfs | less and see which files should be kept
 # after following command, old files will be deleted
-./copy-gfs $KEEPS -c -d data -m 'test*.tar'
-ls -lRtr data
+./copy-gfs $KEEPS -l -c -d ${GFSROOT} -m 'test*.tar'
+ls -lRtr ${GFSROOT}
