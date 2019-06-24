@@ -38,7 +38,7 @@ copy-gfs -c -l -d /backup-gfs -m 'my-db-*'  -s /backup/my-db-2019-05-22.tar.gz
 And then, backups will not interfere with each other. ``copy-gfs`` will simply ignore files that do not fit the mask.
 
 ### How to maintain "latest" copies in addition to GFS historical copies
-Due to historical compatibility reasons, this script saves latest copy only if -l (--keep-latest) option is given.
+Due to historical compatibility reasons, this script saves latest copy only if ``-l`` (``--keep-latest``) option is given.
 
 ### Command-line arguments
 ```
