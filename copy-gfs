@@ -17,15 +17,17 @@ import shutil
 from collections import OrderedDict
 
 # these are described in parse_cmdline
-source_path = None
-dest_base   = None
-file_mask   = None
-date_now    = datetime.datetime.now()
-keep_latest = False
-skip_exist  = False
-do_cleanup  = False
-verbose     = False
-do_debug    = False
+source_path    = None
+dest_base      = None
+file_mask      = None
+date_now       = datetime.datetime.now()
+keep_latest    = False
+skip_exist     = False
+do_cleanup     = False
+append_ts      = False
+always_full_ts = False
+verbose        = False
+do_debug       = False
 
 periods = OrderedDict( [
     ( "minutely", { "keep_count":  0, "datemask": '%Y%m%d%H%M' } ),
@@ -75,56 +77,73 @@ def parse_cmdline():
     global verbose
     global do_debug
     global keep_latest
+    global append_ts
+    global always_full_ts
 
     parser = argparse.ArgumentParser(
             description="Maintain GFS-style directory structure\n"+
             "It will:\n"
-            " - Copy SOURCE file to GFS destination direcories under DESTDIR:\n"+
+            " - Copy SOURCE file to GFS destination directories under DESTDIR:\n"+
             "   DESTDIR/" + ', '.join([p for p in periods.keys() if periods[p]["keep_count"]!=0]) + ",\n"+
             "   and, disabled by default: " + ', '.join([p for p in periods.keys() if periods[p]["keep_count"]==0]) + "\n"+
-            "   Date and time of source file are preserved\n"+
-            " - (if -c given) Cleanup old files from GFS directories:\n"+
-            "   Delete from these directories all files based on MASK except one copy\n"+
-            "   Will keep only one OLDEST copy of each period\n"+
-            "   (i.e., for monthly - 1st of January, 1st of February, etc, or for other\n"+
-            "   dates if there was no files for 1st, anyway only one file per month)\n"+
-            "It will not delete SOURCE file",
+            "   Date and time of source file are preserved\n"
+            " - (if -c given) Cleanup old files from GFS directories:\n"
+            "   Delete from these directories all files based on MASK except one copy\n"
+            "   Will keep only one OLDEST copy of each period\n"
+            "   (i.e., for monthly - 1st of January, 1st of February, etc, or for other\n"
+            "   dates if there was no files for 1st, anyway only one file per month)\n"
+            "It will not delete SOURCE file.\n\n"
+            "Simplest sample: say you have backup.tar and target directory backups-gfs:\n"
+            "  copy-gfs -a -f -c -l -s backup.tar -d backups-gfs\n"
+            ,
             formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument("-s", "--source",
             help="Source file name"
             )
-    parser.add_argument("-d", "--destdir",
-            help="Destination directory, under which GFS subdirs will be made\n"+
-            "Subdirectories: "+', '.join(periods.keys())+"\n"+
-            "No changes will be made outside these subdirectories"
-            )
-    parser.add_argument("-k", "--skipexist", action='store_true',
-            help="Skip copy to GFS directory if it already contains a copy for period that\n"+
-            "corresponds to SOURCE date\n"+
-            "It is more safe not to use -s, but use -c instead\n"+
-            "With -c file will always be first (an always!) copied to GFS,\n"+
-            "  and only then deleted if it is not needed\n"+
-            "  or else it is possible to skip copying if there is an error in this program :-)"
-            )
     parser.add_argument("-c", "--cleanup", action='store_true',
             help="Perform cleanup of GFS directories"
             )
-    parser.add_argument("-m", "--mask",
-            help="File mask (as in shell)\n"+
-            "All files that doesn't begin with mask will be ignored\n"+
-            "Source file must match the mask, otherwise command will finish with an error\n"+
-            "i.e. if your file is my-bck-2018-05-17.tar, then good mask is 'my-bck-*.tar'\n"+
-            "other backup jobs MUST NOT match mask, or some useful data will be deleted from GFS\n"+
-            "or other files may be kept instead of your files\n"+
-            "If mask doesn't end with *, it will be appended to mask\n"+
-            "And DON't FORGET to embrace mask in quotes or excape shell expansion symbols!"
+    parser.add_argument("-d", "--destdir", required=True,
+            help="Destination directory, under which GFS subdirs will be made\n"
+            "Subdirectories: "+', '.join(periods.keys())+"\n"
+            "No changes will be made outside these subdirectories"
+            )
+    parser.add_argument("-m", "--mask", default='*',
+            help="File mask (as in shell)\n"
+            "All files that don't begin with mask will be ignored\n"
+            "Source file must match the mask, otherwise command will finish with an error\n"
+            "i.e. if your file is my-bck-2018-05-17.tar, then good mask is 'my-bck-*.tar'\n"
+            "other backup jobs MUST NOT match mask, or some useful data will be deleted from GFS\n"
+            "or other files may be kept instead of your files\n"
+            "If mask doesn't end with *, it will be appended to mask\n"
+            "Default is '*' (match all files - treat all files in GFS dirs as originating from single source)\n"
+            "And DON't FORGET to embrace mask in quotes or escape shell expansion symbols!"
+            )
+    parser.add_argument("-k", "--skipexist", action='store_true',
+            help="Skip copy to GFS directory if it already contains a copy for period that\n"
+            "corresponds to SOURCE date\n"
+            "It is more safe not to use -k, but use -c instead\n"
+            "With -c file will always be first (and always!) copied to GFS,\n"
+            "  and only then deleted if it is not needed\n"
+            "  or else it is possible to skip copying if there is an error in this program :-)"
             )
     #parser.add_argument("-n", "--now",
     #        help="Pretend that today is given date (useful for testing your strategies)"
     #        )
     parser.add_argument("-l", "--keep-latest", action='store_true', default=False,
-            help="Make a copy of file in 'latest' GFS subdirectory\n"+
+            help="Make a copy of file in 'latest' GFS subdirectory\n"
             "and remove other files with given mask"
+            )
+    parser.add_argument("-a", "--append-timestamp", action='store_true', default=False,
+            help="Always append timestamp to the name of the file copy in GFS dir,\n"
+            "not only when a name conflict occurs.\n"
+            "By default only the date (YYYYMMDD) is appended,\n"
+            "HHMM[SS] appended only if file with same name already exists;\n"
+            "see -f for the full timestamp."
+            )
+    parser.add_argument("-f", "--always-full-timestamp", action='store_true', default=False,
+            help="Always append the full timestamp (YYYYMMDD-HHMMSS) instead of just the date (YYYYMMDD).\n"
+            "Affects both -a and the conflict-resolution naming"
             )
     for period in periods:
         if periods[period]["keep_count"] != 0:
@@ -149,14 +168,8 @@ def parse_cmdline():
     skip_exist  = args.skipexist
     do_cleanup  = args.cleanup
     keep_latest = args.keep_latest
-
-    if dest_base == None:
-        eprint("No destination directory given, use -h for help")
-        return False
-
-    if file_mask == None:
-        eprint("No file mask given, use -h for help")
-        return False
+    append_ts   = args.append_timestamp
+    always_full_ts = args.always_full_timestamp
 
     for period in periods:
         try:
@@ -183,8 +196,7 @@ def parse_cmdline():
     #        return False
 
     if not do_cleanup and not source_path:
-        eprint("You need to specify -c, -s or both; use -h for help")
-        return False
+        parser.error("You need to specify -c, -s or both")
 
     # check that source file matches mask
     if source_path:
@@ -200,6 +212,8 @@ def parse_cmdline():
     dprint("do_cleanup  = '%s'" % do_cleanup)
     dprint("date_now    = '%s'" % date_now)
     dprint("keep_latest = '%s'" % keep_latest)
+    dprint("append_ts   = '%s'" % append_ts)
+    dprint("always_full_ts = '%s'" % always_full_ts)
     dprint("periods definitions:")
     for period in periods:
         dprint("  %s: %s" % (period, periods[period]))
@@ -211,7 +225,7 @@ def raise_if_unknown_period(period):
     raises exception if period name is unknown
     """
     if period not in periods:
-        raise Exception("Internal error: unsupported period '%s'" % (preiod))
+        raise Exception("Internal error: unsupported period '%s'" % (period))
     return True
 
 def period_dirname(period):
@@ -296,33 +310,37 @@ def copy_to_gfs(src, only_if_not_exists=False):
         dprint("Saving latest copy")
         period = "latest"
         destdir = period_dirname(period)
+        latest_dir_ok = True
         if not os.path.exists(destdir):
             veprint("'%s' is not exists, creating" % (destdir))
             try:
                 os.mkdir(destdir)
             except Exception as e:
                 eprint("Failed to create directory '%s': %s" % (destdir, str(e)))
-        dprint("copying %s to %s" % (src, destdir))
-        dst = os.path.join(destdir, os.path.basename(src))
-        try:
-            shutil.copy2(src, dst)
-            veprint("Copied %s to %s" % (src, dst))
-        except Exception as e:
-            eprint("Failed to copy %s to %s: %s" % (src, destdir + os.sep, str(e)))
-            rv = False
-        else:
-            # here, remove all files matching mask but one that we just copied
-            dprint("Removing old copies in latest subdirectory")
-            for filepath in list_gfs(period):
-                if os.path.normpath(filepath) == os.path.normpath(dst):
-                    dprint("Skipping remove of %s, it is the file we just copied" % filepath)
-                else:
-                    veprint("Deleting %s" % (filepath))
-                    try:
-                        os.remove(filepath)
-                    except Exception as e:
-                        eprint("Failed to delete %s: %s" % (filepath, str(e)))
-                        rv = False
+                rv = False
+                latest_dir_ok = False
+        if latest_dir_ok:
+            dprint("copying %s to %s" % (src, destdir))
+            dst = os.path.join(destdir, os.path.basename(src))
+            try:
+                shutil.copy2(src, dst)
+                veprint("Copied %s to %s" % (src, dst))
+            except Exception as e:
+                eprint("Failed to copy %s to %s: %s" % (src, destdir + os.sep, str(e)))
+                rv = False
+            else:
+                # here, remove all files matching mask but one that we just copied
+                dprint("Removing old copies in latest subdirectory")
+                for filepath in list_gfs(period):
+                    if os.path.normpath(filepath) == os.path.normpath(dst):
+                        dprint("Skipping remove of %s, it is the file we just copied" % filepath)
+                    else:
+                        veprint("Deleting %s" % (filepath))
+                        try:
+                            os.remove(filepath)
+                        except Exception as e:
+                            eprint("Failed to delete %s: %s" % (filepath, str(e)))
+                            rv = False
 
     for period in periods:
         if periods[period]["keep_count"] == 0:
@@ -344,15 +362,25 @@ def copy_to_gfs(src, only_if_not_exists=False):
         else:
             dprint("copying %s to %s" % (src, destdir))
             dst = os.path.join(destdir, os.path.basename(src))
-            if os.path.exists(dst):
-                dprint("%s exists, appending date to name" % (dst))
-                dst = dst + "." + source_dt.strftime("%Y%m%d")
-            if os.path.exists(dst):
-                dprint("%s exists, appending time to name" % (dst))
-                dst = dst + "-" + source_dt.strftime("%H%M")
-            if os.path.exists(dst):
-                dprint("%s exists, appending seconds to name" % (dst))
-                dst = dst + source_dt.strftime("%S")
+            if always_full_ts:
+                ts_suffix = "." + source_dt.strftime("%Y%m%d-%H%M%S")
+            else:
+                ts_suffix = "." + source_dt.strftime("%Y%m%d")
+            # append date (or full timestamp with -f): always with -a, otherwise only on name conflict
+            if append_ts or os.path.exists(dst):
+                if append_ts:
+                    dprint("appending timestamp to name (-a given)")
+                else:
+                    dprint("%s exists, appending date to name" % (dst))
+                dst = dst + ts_suffix
+            # on further name conflict escalate the same way regardless of -a
+            if not always_full_ts:
+                if os.path.exists(dst):
+                    dprint("%s exists, appending time to name" % (dst))
+                    dst = dst + "-" + source_dt.strftime("%H%M")
+                if os.path.exists(dst):
+                    dprint("%s exists, appending seconds to name" % (dst))
+                    dst = dst + source_dt.strftime("%S")
             dst_final = dst
             dst_counter = 1
             while os.path.exists(dst_final):

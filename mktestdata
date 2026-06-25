@@ -8,7 +8,7 @@ mktest() {
   while [ -e "$dir/${template}${cnt}.tar" ]; do
     if [ -z "$cnt" ]; then
       cnt=1
-    else:
+    else
       cnt=$(( $cnt + 1 ))
     fi
   done
@@ -22,7 +22,7 @@ mktest() {
 GFSROOT=data/gfs
 mkdir -p "$GFSROOT"
 
-# generate some files that will already be saved in gfs directories befor running copy-gfs - to see which files will be kept and which deleted
+# generate some files that will already be saved in gfs directories before running copy-gfs - to see which files will be kept and which deleted
 for dir in ${GFSROOT}/latest ${GFSROOT}/hourly ${GFSROOT}/minutely ${GFSROOT}/daily ${GFSROOT}/weekly ${GFSROOT}/monthly ${GFSROOT}/yearly; do
   rm -rf "$dir"
   mkdir -p $dir
